@@ -1,0 +1,53 @@
+# Gradle / Android build output
+.gradle/
+**/build/
+local.properties
+
+# Manual build artifacts used during Termux testing
+manual-build/
+apkbuild/
+dex/
+dexcheck/
+miui-out/
+raw-out/
+
+# Compiled Android packages / intermediate files
+*.apk
+*.aab
+*.ap_
+*.idsig
+*.dex
+
+# Signing keys / certificates — NEVER COMMIT THESE
+*.keystore
+*.jks
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Proprietary / local framework files used during reverse engineering
+miui-services.jar
+android.jar
+
+# Reverse-engineering / debug output
+jadx-errors.txt
+jadx-debug.txt
+*.log
+
+# IDE / editor files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Java / OS temporary files
+*.class
+*.tmp
+*.swp
+*~
+
+# Keep the Gradle wrapper JAR tracked.
+# Do NOT add a blanket "*.jar" ignore rule.
+!gradle/wrapper/gradle-wrapper.jar
