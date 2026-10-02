@@ -1,128 +1,102 @@
 # HyperOS Wallet Shortcut
 
-A tiny, rootless compatibility shim that lets supported Xiaomi/Redmi HyperOS devices use the physical **Power button double-press** shortcut to open **Google Wallet** in regions/devices where HyperOS exposes its Mi Pay shortcut but Mi Pay itself is unavailable.
+Open Google Wallet by double-pressing the physical power button on compatible HyperOS devices.
 
-> Unofficial project. Not affiliated with Xiaomi or Google.
+> Unofficial open-source project. Not affiliated with Xiaomi or Google.
+
+<p align="center">
+  <img src="screenshots/hero.png" width="360" alt="HyperOS Wallet Shortcut">
+</p>
+
+## About
+
+HyperOS Wallet Shortcut is a small Android utility that enables the physical power-button double-press shortcut to launch Google Wallet on compatible Xiaomi, Redmi and POCO devices.
+
+It does not process payments and does not access your cards, NFC data, Google account, or Google Wallet data.
 
 ## How it works
 
-On the tested HyperOS firmware, Xiaomi's power-key shortcut dispatcher recognizes the internal function identifier `mi_pay`. That path sends an intent with action:
+HyperOS contains an internal shortcut named `mi_pay`.
 
-```text
-com.miui.intent.action.DOUBLE_CLICK
-```
+When the power button is double-pressed, HyperOS attempts to launch Xiaomi's wallet package:
 
-to package:
+`com.miui.tsmclient`
 
-```text
-com.miui.tsmclient
-```
+This app intentionally uses that package name, receives HyperOS' wallet shortcut intent, and immediately forwards it to Google Wallet.
 
-This app intentionally uses that package name, receives the shortcut intent, and immediately launches the installed Google Wallet activity:
+**Power ×2 → HyperOS `mi_pay` → HyperOS Wallet Shortcut → Google Wallet**
 
-```text
-com.google.android.apps.walletnfcrel/com.google.commerce.tapandpay.android.wallet.WalletActivity
-```
+## Requirements
 
-The important discovery is that **`mi_pay` is the shortcut function identifier**. `launchMiPay` is the private framework method name and is not the value HyperOS expects in `double_click_power_key`.
+- Compatible Xiaomi / Redmi / POCO device running HyperOS
+- Google Wallet installed
+- Shizuku
+- A Shizuku-compatible shell such as aShell
+- Xiaomi's real `com.miui.tsmclient` / Mi Pay package must **not** already be installed
 
-## Setup
+## Installation
 
-### Requirements
-
-- A Xiaomi/Redmi device whose HyperOS build contains the Mi Pay power-key shortcut path.
-- Google Wallet installed.
-- A shell with permission to modify the relevant system setting. The tested setup used **Shizuku + aShell**.
-- No root is required for the tested setup.
-
-### 1. Install the APK
-
-Install a release build of HyperOS Wallet Shortcut. Because the app intentionally uses `com.miui.tsmclient`, installation will conflict with Xiaomi's real Mi Pay/TSM Client if that package is already installed on your device.
-
-### 2. Configure Power ×2
-
-In a Shizuku-authorized shell such as aShell, run:
+1. Download the latest APK from the [Releases](../../releases/latest) page.
+2. Install the APK.
+3. Start Shizuku.
+4. Open aShell and grant Shizuku access.
+5. Run:
 
 ```sh
 settings put system double_click_power_key mi_pay
 ```
 
-Verify it with:
+6. Double-press the physical power button.
 
-```sh
-settings get system double_click_power_key
-```
+Google Wallet should open.
 
-Expected output:
+## App preview
 
-```text
-mi_pay
-```
+<p align="center">
+  <img src="screenshots/full-page.png" width="360" alt="Full HyperOS Wallet Shortcut interface">
+</p>
 
-### 3. Test
+The app includes:
 
-Double-press the physical Power button. HyperOS should invoke its Mi Pay shortcut and this app should forward it to Google Wallet.
-
-You can also open the app normally and tap **Test Google Wallet** to verify the forwarding side independently.
-
-## Restore the camera shortcut
-
-If your device previously used Power ×2 for Camera, the tested HyperOS value was:
-
-```sh
-settings put system double_click_power_key launch_camera
-```
-
-Exact available shortcut values can vary by firmware.
-
-## Compatibility
-
-This is an undocumented HyperOS implementation detail, not a public Android API. Xiaomi can change or remove it in a system update. A device is not automatically compatible merely because it runs HyperOS.
-
-The initial proof of concept was developed and tested on a Redmi device running Android 16 / HyperOS 3. Additional device/firmware reports are welcome.
-
-## Troubleshooting
-
-### Opening the app works, but Power ×2 does nothing
-
-Check:
-
-```sh
-settings get system double_click_power_key
-```
-
-It must be `mi_pay` on the firmware this workaround was designed for.
-
-For debugging, clear logs, press Power twice, then inspect the Xiaomi input shortcut messages:
-
-```sh
-logcat -c
-# Double-press Power, then:
-logcat -d -v time | grep -i -E "ShortCutActionsUtils|com.miui.tsmclient|mi_pay|double_click_power|MiuiInputKeyEventLog|ActivityTaskManager"
-```
-
-### Google Wallet does not open from the app
-
-Make sure the Google Wallet package `com.google.android.apps.walletnfcrel` is installed and enabled. Google can change internal activity names in future Wallet versions; if that happens, the forwarding component may need to be updated.
-
-### `com.miui.tsmclient` is already installed
-
-This project cannot be installed alongside another app using the same package name. Do not remove a system payment app merely to install this project unless you understand the consequences for your device and region.
+- Google Wallet detection
+- Test Google Wallet button
+- Setup instructions
+- Copy setup command button
+- Light and dark mode
+- Explanation of how the shortcut works
+- Compatibility and privacy information
 
 ## Privacy
 
-The app has no network permission and does not read or store payment information. It only forwards the shortcut to Google Wallet and provides a local setup screen.
+HyperOS Wallet Shortcut:
 
-## Building
+- Has no analytics
+- Has no ads
+- Does not access payment cards
+- Does not access NFC payment data
+- Does not access your Google account
+- Does not require root
 
-Open the repository in Android Studio with Android SDK 35 installed, then build the `app` module. The project uses Java and has no third-party runtime dependencies.
+The app only receives the HyperOS shortcut intent and launches Google Wallet.
 
-Do **not** commit signing keys. Use your own private release key for releases.
+## Compatibility
 
-## Repository hygiene
+This project relies on an internal HyperOS implementation and may stop working if Xiaomi changes the shortcut system in a future update.
 
-Proprietary Xiaomi framework JARs, decompiled framework sources, DEX files, signing keys, and local reverse-engineering artifacts are intentionally **not** included in this repository.
+Do not install this application on devices where Xiaomi's real Mi Pay / `com.miui.tsmclient` package is already installed.
+
+## Why does the package name look like Xiaomi Mi Pay?
+
+HyperOS specifically targets `com.miui.tsmclient` when the `mi_pay` shortcut is triggered.
+
+Using this package name is therefore required for the shortcut to work.
+
+## Security
+
+The source code is intentionally small so the behavior of the application can be easily inspected.
+
+Never install APKs claiming to be this project from unofficial sources.
 
 ## License
 
-Apache-2.0. See `LICENSE`.
+Apache License 2.0
