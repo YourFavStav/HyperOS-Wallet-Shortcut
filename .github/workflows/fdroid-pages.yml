@@ -1,0 +1,122 @@
+name: Publish F-Droid Repository
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: fdroid-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      FDROID_REPO_STOREPASS: ${{ secrets.FDROID_REPO_STOREPASS }}
+      FDROID_REPO_KEYPASS: ${{ secrets.FDROID_REPO_KEYPASS }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install fdroidserver
+        run: pip install fdroidserver
+
+      - name: Restore F-Droid repository signing key
+        env:
+          FDROID_REPO_KEYSTORE_B64: ${{ secrets.FDROID_REPO_KEYSTORE_B64 }}
+        run: |
+          echo "$FDROID_REPO_KEYSTORE_B64" | base64 --decode > fdroid/repo-signing.jks
+          chmod 600 fdroid/repo-signing.jks
+
+      - name: Download released APKs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p fdroid/repo
+
+          gh release list \
+            --limit 100 \
+            --json tagName,isDraft,isPrerelease \
+            --jq '.[] | select(.isDraft == false and .isPrerelease == false) | .tagName' |
+          while read -r tag; do
+            echo "Downloading APKs from $tag"
+            gh release download "$tag" \
+              --pattern '*.apk' \
+              --dir fdroid/repo \
+              --clobber
+          done
+
+      - name: Generate signed F-Droid repository
+        run: |
+          cd fdroid
+          fdroid update
+
+      - name: Prepare GitHub Pages files
+        run: |
+          mkdir -p public/fdroid
+          cp -a fdroid/repo public/fdroid/
+
+          cat > public/index.html <<'HTML'
+          <!doctype html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>HyperOS Wallet Shortcut F-Droid Repo</title>
+          </head>
+          <body>
+            <h1>HyperOS Wallet Shortcut</h1>
+            <p>Official F-Droid repository.</p>
+            <p>
+              Repo URL:
+              <a href="fdroid/repo/">
+                https://yourfavstav.github.io/HyperOS-Wallet-Shortcut/fdroid/repo/
+              </a>
+            </p>
+          </body>
+          </html>
+          HTML
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

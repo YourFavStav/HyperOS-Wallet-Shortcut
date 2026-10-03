@@ -51,3 +51,6 @@ Thumbs.db
 # Keep the Gradle wrapper JAR tracked.
 # Do NOT add a blanket "*.jar" ignore rule.
 !gradle/wrapper/gradle-wrapper.jar
+
+# F-Droid repository signing keys
+*.jks

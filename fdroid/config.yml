@@ -1,0 +1,8 @@
+repo_url: "https://yourfavstav.github.io/HyperOS-Wallet-Shortcut/fdroid/repo"
+repo_name: "HyperOS Wallet Shortcut"
+repo_description: "Official F-Droid repository for HyperOS Wallet Shortcut."
+
+repo_keyalias: repokey
+keystore: repo-signing.jks
+keystorepass: {env: FDROID_REPO_STOREPASS}
+keypass: {env: FDROID_REPO_KEYPASS}
