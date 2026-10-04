@@ -2,7 +2,9 @@
 
 A rootless HyperOS utility that lets compatible Xiaomi, Redmi and POCO devices open **Google Wallet** by double-pressing the physical power button.
 
-> **Unofficial project.** Not affiliated with Xiaomi, Google, or Shizuku.
+> **Unofficial independent project.** Not affiliated with, endorsed by, sponsored by, or associated with Xiaomi, Google, Shizuku, or their affiliates.
+
+Third-party product names and trademarks are used only to describe compatibility and interoperability. See [`TRADEMARKS.md`](TRADEMARKS.md).
 
 <p align="center">
   <img src="screenshots/hero.jpg" alt="HyperOS Wallet Shortcut" width="360">
@@ -159,17 +161,19 @@ If you test the app on another device, compatibility reports are welcome. Useful
 
 ## Important package-name warning
 
-This project intentionally uses Xiaomi's Mi Pay package name:
+This project intentionally uses the Android package identifier:
 
-```text
-com.miui.tsmclient
-```
+`com.miui.tsmclient`
 
-This is required because HyperOS routes the internal `mi_pay` shortcut to that package.
+This identifier is used solely for interoperability with compatible HyperOS versions, because HyperOS routes its internal `mi_pay` power-button shortcut to that package identifier.
 
-**Do not install this app if your device already has Xiaomi's real `com.miui.tsmclient` / Mi Pay package installed.**
+This project is **not** Xiaomi's Mi Pay application, does not contain Xiaomi proprietary code or assets, and is not affiliated with or endorsed by Xiaomi.
 
-Only one installed app can own a package name at a time.
+**Do not install this app if your device already has Xiaomi's genuine `com.miui.tsmclient` / Mi Pay package installed.**
+
+Android allows only one installed application to own a given package identifier at a time.
+
+For additional trademark and affiliation information, see [`TRADEMARKS.md`](TRADEMARKS.md).
 
 ## Why Shizuku is needed
 
