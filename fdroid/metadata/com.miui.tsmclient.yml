@@ -5,20 +5,28 @@ SourceCode: https://github.com/YourFavStav/HyperOS-Wallet-Shortcut
 IssueTracker: https://github.com/YourFavStav/HyperOS-Wallet-Shortcut/issues
 
 Name: HyperOS Wallet Shortcut
-Summary: Open Google Wallet with a double press of Power on HyperOS
+Summary: Unofficial power-button shortcut utility for compatible HyperOS devices
 
 Description: |-
-  A rootless HyperOS compatibility utility that redirects Xiaomi's
-  internal Mi Pay power-button shortcut to Google Wallet.
+  An independent, unofficial open-source compatibility utility that allows
+  compatible Xiaomi, Redmi and POCO devices to open Google Wallet using the
+  physical power-button double-press shortcut.
 
-  Built-in Shizuku setup can configure the shortcut without root.
-  Shizuku can be stopped after setup.
+  This project is not affiliated with, endorsed by, sponsored by, or associated
+  with Xiaomi, Google, Shizuku, or their affiliates.
 
-  The application intentionally uses the package ID com.miui.tsmclient
-  because HyperOS targets that package for its internal Mi Pay shortcut.
+  Built-in Shizuku setup can configure the shortcut without root. Shizuku can
+  be stopped after setup.
 
-  Do not install this app on devices that already contain Xiaomi's real
-  com.miui.tsmclient / Mi Pay application.
+  The Android package identifier `com.miui.tsmclient` is used solely for
+  interoperability because compatible HyperOS versions route the relevant
+  system shortcut to that package identifier.
+
+  This project does not contain or distribute Xiaomi's Mi Pay application,
+  Xiaomi proprietary code, or Xiaomi proprietary assets.
+
+  Do not install this app on a device that already contains Xiaomi's genuine
+  `com.miui.tsmclient` / Mi Pay application.
 
 AntiFeatures:
   NonFreeDep:
