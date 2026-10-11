@@ -15,6 +15,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Parcel;
@@ -37,8 +38,13 @@ public class LauncherActivity extends Activity {
     private static final String SHORTCUT_VALUE = "mi_pay";
     private static final String PREFS = "shortcut_prefs";
     private static final String PREF_PREVIOUS = "previous_double_click_power_key";
+    private static final String PREF_NOTIFICATION_PERMISSION_ASKED =
+            "notification_permission_asked";
+    private static final String POST_NOTIFICATIONS_PERMISSION =
+            "android.permission.POST_NOTIFICATIONS";
 
     private static final int SHIZUKU_REQUEST_CODE = 1001;
+    private static final int NOTIFICATION_REQUEST_CODE = 1002;
     private static final int OP_NONE = 0;
     private static final int OP_ENABLE = 1;
     private static final int OP_RESTORE = 2;
@@ -121,6 +127,8 @@ public class LauncherActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        requestNotificationPermissionIfNeeded();
 
         dark = (getResources().getConfiguration().uiMode
                 & Configuration.UI_MODE_NIGHT_MASK)
@@ -222,11 +230,13 @@ public class LauncherActivity extends Activity {
 
         Button test = actionButton("Test Google Wallet", false);
         test.setOnClickListener(v -> {
-            if (!WalletLauncher.open(this)) {
+            WalletLauncher.LaunchResult result = WalletLauncher.open(this);
+
+            if (result != WalletLauncher.LaunchResult.SUCCESS) {
                 Toast.makeText(
                         this,
-                        "Google Wallet could not be opened.",
-                        Toast.LENGTH_SHORT
+                        WalletLauncher.errorMessage(result),
+                        Toast.LENGTH_LONG
                 ).show();
             }
         });
@@ -879,4 +889,31 @@ public class LauncherActivity extends Activity {
             return exitCode == 0;
         }
     }
+
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < 33) {
+            return;
+        }
+
+        if (checkSelfPermission(POST_NOTIFICATIONS_PERMISSION)
+                == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        if (prefs.getBoolean(PREF_NOTIFICATION_PERMISSION_ASKED, false)) {
+            return;
+        }
+
+        prefs.edit()
+                .putBoolean(PREF_NOTIFICATION_PERMISSION_ASKED, true)
+                .apply();
+
+        requestPermissions(
+                new String[]{POST_NOTIFICATIONS_PERMISSION},
+                NOTIFICATION_REQUEST_CODE
+        );
+    }
+
 }
