@@ -29,6 +29,13 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
+import org.json.JSONObject;
+
 import rikka.shizuku.Shizuku;
 
 public class LauncherActivity extends Activity {
@@ -43,6 +50,22 @@ public class LauncherActivity extends Activity {
     private static final String POST_NOTIFICATIONS_PERMISSION =
             "android.permission.POST_NOTIFICATIONS";
 
+    private static final String UPDATE_INFO_URL =
+            "https://raw.githubusercontent.com/YourFavStav/HyperOS-Wallet-Shortcut/v1.2.0-dev/update.json";
+
+    private static final String RELEASES_URL =
+            "https://github.com/YourFavStav/HyperOS-Wallet-Shortcut/releases/latest";
+
+    private static final String PREF_LAST_UPDATE_CHECK =
+            "last_update_check";
+    private static final String PREF_CACHED_UPDATE_CODE =
+            "cached_update_code";
+    private static final String PREF_CACHED_UPDATE_NAME =
+            "cached_update_name";
+
+    private static final long UPDATE_CHECK_INTERVAL_MS =
+            12L * 60L * 60L * 1000L;
+
     private static final int SHIZUKU_REQUEST_CODE = 1001;
     private static final int NOTIFICATION_REQUEST_CODE = 1002;
     private static final int OP_NONE = 0;
@@ -54,6 +77,8 @@ public class LauncherActivity extends Activity {
 
     private TextView shortcutStatus;
     private TextView shizukuStatus;
+    private LinearLayout updateContainer;
+    private TextView updateMessage;
     private Button enableButton;
     private Button restoreButton;
 
@@ -171,6 +196,7 @@ public class LauncherActivity extends Activity {
         setContentView(buildUi());
 
         refreshStatuses();
+        checkForUpdates();
     }
 
     @Override
@@ -212,6 +238,26 @@ public class LauncherActivity extends Activity {
                 16, secondary);
         subtitle.setLineSpacing(0, 1.15f);
         root.addView(subtitle);
+
+        updateContainer = vertical();
+        updateContainer.setVisibility(View.GONE);
+
+        space(updateContainer, 18);
+
+        LinearLayout updateCard = sectionCard();
+        updateCard.addView(sectionTitle("Update available"));
+
+        updateMessage = body("A newer version is available.");
+        updateCard.addView(updateMessage);
+
+        space(updateCard, 12);
+
+        Button viewUpdate = actionButton("View update", true);
+        viewUpdate.setOnClickListener(v -> openLatestRelease());
+        updateCard.addView(viewUpdate);
+
+        updateContainer.addView(updateCard);
+        root.addView(updateContainer);
 
         space(root, 18);
 
@@ -887,6 +933,159 @@ public class LauncherActivity extends Activity {
 
         boolean ok() {
             return exitCode == 0;
+        }
+    }
+
+    private void checkForUpdates() {
+        final int currentVersionCode = getCurrentVersionCode();
+
+        if (currentVersionCode < 0) {
+            return;
+        }
+
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        int cachedCode = prefs.getInt(PREF_CACHED_UPDATE_CODE, -1);
+        String cachedName = prefs.getString(PREF_CACHED_UPDATE_NAME, "");
+
+        if (cachedCode > currentVersionCode) {
+            showUpdateAvailable(cachedName);
+        }
+
+        long now = System.currentTimeMillis();
+        long lastCheck = prefs.getLong(PREF_LAST_UPDATE_CHECK, 0L);
+
+        if (now - lastCheck < UPDATE_CHECK_INTERVAL_MS) {
+            return;
+        }
+
+        new Thread(() -> fetchUpdateInfo(currentVersionCode),
+                "wallet-shortcut-update-check").start();
+    }
+
+    private void fetchUpdateInfo(int currentVersionCode) {
+        HttpURLConnection connection = null;
+
+        try {
+            URL url = new URL(UPDATE_INFO_URL);
+
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(5000);
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty(
+                    "User-Agent",
+                    "HyperOS-Wallet-Shortcut"
+            );
+
+            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                return;
+            }
+
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(
+                            connection.getInputStream(),
+                            "UTF-8"
+                    )
+            );
+
+            StringBuilder jsonText = new StringBuilder();
+            String line;
+
+            while ((line = reader.readLine()) != null) {
+                jsonText.append(line);
+            }
+
+            reader.close();
+
+            JSONObject json = new JSONObject(jsonText.toString());
+
+            int remoteVersionCode = json.getInt("versionCode");
+            String remoteVersionName =
+                    json.optString("versionName", "").trim();
+
+            SharedPreferences prefs =
+                    getSharedPreferences(PREFS, MODE_PRIVATE);
+
+            prefs.edit()
+                    .putInt(PREF_CACHED_UPDATE_CODE, remoteVersionCode)
+                    .putString(PREF_CACHED_UPDATE_NAME, remoteVersionName)
+                    .putLong(PREF_LAST_UPDATE_CHECK, System.currentTimeMillis())
+                    .apply();
+
+            runOnUiThread(() -> {
+                if (isFinishing()) {
+                    return;
+                }
+
+                if (remoteVersionCode > currentVersionCode) {
+                    showUpdateAvailable(remoteVersionName);
+                } else {
+                    hideUpdateAvailable();
+                }
+            });
+
+        } catch (Exception ignored) {
+            // Update checks must never interfere with normal app use.
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private int getCurrentVersionCode() {
+        try {
+            return getPackageManager()
+                    .getPackageInfo(getPackageName(), 0)
+                    .versionCode;
+        } catch (PackageManager.NameNotFoundException ignored) {
+            return -1;
+        }
+    }
+
+    private void showUpdateAvailable(String versionName) {
+        if (updateContainer == null || updateMessage == null) {
+            return;
+        }
+
+        String version = versionName == null
+                ? ""
+                : versionName.trim();
+
+        if (version.length() > 0) {
+            updateMessage.setText(
+                    "Version " + version + " is available."
+            );
+        } else {
+            updateMessage.setText(
+                    "A newer version is available."
+            );
+        }
+
+        updateContainer.setVisibility(View.VISIBLE);
+    }
+
+    private void hideUpdateAvailable() {
+        if (updateContainer != null) {
+            updateContainer.setVisibility(View.GONE);
+        }
+    }
+
+    private void openLatestRelease() {
+        try {
+            startActivity(
+                    new Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse(RELEASES_URL)
+                    )
+            );
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(
+                    this,
+                    "No browser is available to open the release page.",
+                    Toast.LENGTH_LONG
+            ).show();
         }
     }
 
