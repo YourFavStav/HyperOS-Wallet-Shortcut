@@ -263,7 +263,9 @@ public class LauncherActivity extends Activity {
 
         boolean walletInstalled = isWalletInstalled();
         root.addView(statusPill(
-                walletInstalled ? "●  Google Wallet detected" : "●  Google Wallet not detected",
+                walletInstalled
+                        ? "✓  Google Wallet installed"
+                        : "⚠  Google Wallet not installed",
                 walletInstalled
         ));
 
@@ -312,6 +314,7 @@ public class LauncherActivity extends Activity {
         space(control, 10);
 
         restoreButton = actionButton("Restore previous shortcut", false);
+        restoreButton.setEnabled(hasPreviousShortcut());
         restoreButton.setOnClickListener(v -> startOperation(OP_RESTORE));
         control.addView(restoreButton);
 
@@ -617,24 +620,43 @@ public class LauncherActivity extends Activity {
 
     private void refreshStatuses() {
         runOnUiThread(() -> {
-            if (shortcutStatus != null) {
-                String localValue = readShortcutValueLocally();
-                boolean enabled = SHORTCUT_VALUE.equals(localValue);
+            String localValue = readShortcutValueLocally();
+            boolean shortcutEnabled = SHORTCUT_VALUE.equals(localValue);
 
+            if (shortcutStatus != null) {
                 styleStatus(
                         shortcutStatus,
-                        enabled
-                                ? "●  Power-button shortcut enabled"
-                                : "●  Power-button shortcut not enabled",
-                        enabled
+                        shortcutEnabled
+                                ? "✓  Power shortcut ready"
+                                : "⚠  Power shortcut not configured",
+                        shortcutEnabled
                 );
+            }
+
+            if (enableButton != null && pendingOperation == OP_NONE) {
+                enableButton.setEnabled(!shortcutEnabled);
+                enableButton.setText(
+                        shortcutEnabled
+                                ? "Shortcut already enabled"
+                                : "Enable shortcut with Shizuku"
+                );
+            }
+
+            if (restoreButton != null && pendingOperation == OP_NONE) {
+                restoreButton.setEnabled(hasPreviousShortcut());
             }
 
             if (shizukuStatus != null) {
                 boolean running = Shizuku.pingBinder();
 
                 if (!running) {
-                    styleStatus(shizukuStatus, "●  Shizuku not running", false);
+                    styleStatus(
+                            shizukuStatus,
+                            shortcutEnabled
+                                    ? "Shizuku stopped — not required right now"
+                                    : "Shizuku not running — needed for setup",
+                            shortcutEnabled
+                    );
                 } else {
                     boolean granted = false;
 
@@ -647,8 +669,8 @@ public class LauncherActivity extends Activity {
                     styleStatus(
                             shizukuStatus,
                             granted
-                                    ? "●  Shizuku ready"
-                                    : "●  Shizuku running — permission needed",
+                                    ? "✓  Shizuku ready"
+                                    : "⚠  Shizuku running — permission needed",
                             granted
                     );
                 }
@@ -678,17 +700,30 @@ public class LauncherActivity extends Activity {
 
     private void setBusy(boolean busy, String label) {
         if (enableButton != null) {
-            enableButton.setEnabled(!busy);
-            enableButton.setText(
-                    busy && label != null
-                            ? label
-                            : "Enable shortcut with Shizuku"
-            );
+            boolean shortcutEnabled =
+                    SHORTCUT_VALUE.equals(readShortcutValueLocally());
+
+            enableButton.setEnabled(!busy && !shortcutEnabled);
+
+            if (busy && label != null) {
+                enableButton.setText(label);
+            } else {
+                enableButton.setText(
+                        shortcutEnabled
+                                ? "Shortcut already enabled"
+                                : "Enable shortcut with Shizuku"
+                );
+            }
         }
 
         if (restoreButton != null) {
-            restoreButton.setEnabled(!busy);
+            restoreButton.setEnabled(!busy && hasPreviousShortcut());
         }
+    }
+
+    private boolean hasPreviousShortcut() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE)
+                .contains(PREF_PREVIOUS);
     }
 
     private void openShizuku() {
