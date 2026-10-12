@@ -51,17 +51,17 @@ public class LauncherActivity extends Activity {
             "android.permission.POST_NOTIFICATIONS";
 
     private static final String UPDATE_INFO_URL =
-            "https://raw.githubusercontent.com/YourFavStav/HyperOS-Wallet-Shortcut/v1.2.0-dev/update.json";
+            "https://raw.githubusercontent.com/YourFavStav/HyperOS-Wallet-Shortcut/main/update.json";
 
     private static final String RELEASES_URL =
             "https://github.com/YourFavStav/HyperOS-Wallet-Shortcut/releases/latest";
 
     private static final String PREF_LAST_UPDATE_CHECK =
-            "last_update_check";
+            "last_update_check_v1";
     private static final String PREF_CACHED_UPDATE_CODE =
-            "cached_update_code";
+            "cached_update_code_v1";
     private static final String PREF_CACHED_UPDATE_NAME =
-            "cached_update_name";
+            "cached_update_name_v1";
 
     private static final long UPDATE_CHECK_INTERVAL_MS =
             12L * 60L * 60L * 1000L;
