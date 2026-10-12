@@ -82,9 +82,17 @@ public class LauncherActivity extends Activity {
     private Button enableButton;
     private Button restoreButton;
 
+    private static final long USER_SERVICE_TIMEOUT_MS = 8000L;
+
     private int pendingOperation = OP_NONE;
     private IBinder userServiceBinder;
     private boolean userServiceBound;
+
+    private final android.os.Handler userServiceTimeoutHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+
+    private Runnable userServiceTimeoutRunnable;
+    private boolean compatibilityFallbackRunning;
 
     private Shizuku.UserServiceArgs userServiceArgs;
 
@@ -119,10 +127,23 @@ public class LauncherActivity extends Activity {
     private final ServiceConnection userServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
+            cancelUserServiceTimeout();
+
             userServiceBinder = service;
             userServiceBound = true;
 
+            if (compatibilityFallbackRunning) {
+                unbindUserServiceSafely();
+                return;
+            }
+
             final int operation = pendingOperation;
+
+            if (operation == OP_NONE) {
+                unbindUserServiceSafely();
+                return;
+            }
+
             pendingOperation = OP_NONE;
 
             new Thread(() -> {
@@ -207,6 +228,7 @@ public class LauncherActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        cancelUserServiceTimeout();
         unbindUserServiceSafely();
 
         Shizuku.removeBinderReceivedListener(binderReceivedListener);
@@ -451,16 +473,395 @@ public class LauncherActivity extends Activity {
     private void bindForPendingOperation() {
         if (pendingOperation == OP_NONE) return;
 
+        final int operation = pendingOperation;
+
         try {
-            Shizuku.bindUserService(userServiceArgs, userServiceConnection);
+            scheduleUserServiceTimeout(operation);
+            Shizuku.bindUserService(
+                    userServiceArgs,
+                    userServiceConnection
+            );
         } catch (Throwable e) {
-            pendingOperation = OP_NONE;
-            setBusy(false, null);
-            Toast.makeText(
+            cancelUserServiceTimeout();
+            cancelPendingUserServiceSafely();
+            startCompatibilityFallback(operation);
+        }
+    }
+
+    private void scheduleUserServiceTimeout(final int operation) {
+        cancelUserServiceTimeout();
+
+        userServiceTimeoutRunnable = () -> {
+            userServiceTimeoutRunnable = null;
+
+            if (pendingOperation != operation
+                    || userServiceBound
+                    || compatibilityFallbackRunning) {
+                return;
+            }
+
+            cancelPendingUserServiceSafely();
+            startCompatibilityFallback(operation);
+        };
+
+        userServiceTimeoutHandler.postDelayed(
+                userServiceTimeoutRunnable,
+                USER_SERVICE_TIMEOUT_MS
+        );
+    }
+
+    private void cancelUserServiceTimeout() {
+        if (userServiceTimeoutRunnable != null) {
+            userServiceTimeoutHandler.removeCallbacks(
+                    userServiceTimeoutRunnable
+            );
+            userServiceTimeoutRunnable = null;
+        }
+    }
+
+    private void cancelPendingUserServiceSafely() {
+        try {
+            Shizuku.unbindUserService(
+                    userServiceArgs,
+                    userServiceConnection,
+                    true
+            );
+        } catch (Throwable ignored) {
+        }
+
+        userServiceBinder = null;
+        userServiceBound = false;
+    }
+
+    private void startCompatibilityFallback(final int operation) {
+        if (operation == OP_NONE || compatibilityFallbackRunning) {
+            return;
+        }
+
+        compatibilityFallbackRunning = true;
+
+        setBusy(
+                true,
+                operation == OP_ENABLE
+                        ? "Trying compatibility mode…"
+                        : "Trying compatibility restore…"
+        );
+
+        new Thread(() -> {
+            try {
+                if (operation == OP_ENABLE) {
+                    performEnableCompatibility();
+                } else if (operation == OP_RESTORE) {
+                    performRestoreCompatibility();
+                }
+            } finally {
+                runOnUiThread(() -> {
+                    compatibilityFallbackRunning = false;
+
+                    if (pendingOperation == operation) {
+                        pendingOperation = OP_NONE;
+                    }
+
+                    setBusy(false, null);
+                    refreshStatuses();
+                });
+            }
+        }, "wallet-shortcut-compat").start();
+    }
+
+    private void performEnableCompatibility() {
+        CompatResult before = compatibilityGet();
+
+        if (!before.ok()) {
+            showCompatibilityFailure(
+                    "Compatibility mode could not read the current shortcut.",
+                    before
+            );
+            return;
+        }
+
+        String previous = normalizeSetting(before.output);
+
+        if (previous.length() == 0) {
+            previous = "none";
+        }
+
+        SharedPreferences prefs =
+                getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        if (!SHORTCUT_VALUE.equals(previous)
+                && !prefs.contains(PREF_PREVIOUS)) {
+            prefs.edit()
+                    .putString(PREF_PREVIOUS, previous)
+                    .apply();
+        }
+
+        CompatResult write =
+                compatibilityPut(SHORTCUT_VALUE);
+
+        if (!write.ok()) {
+            showCompatibilityFailure(
+                    "Compatibility mode could not enable the shortcut.",
+                    write
+            );
+            return;
+        }
+
+        CompatResult verify = compatibilityGet();
+
+        final boolean enabled =
+                verify.ok()
+                        && SHORTCUT_VALUE.equals(
+                                normalizeSetting(verify.output)
+                        );
+
+        runOnUiThread(() -> Toast.makeText(
+                this,
+                enabled
+                        ? "Shortcut enabled using compatibility mode. You can stop Shizuku now."
+                        : "Compatibility mode ran, but HyperOS did not keep the mi_pay setting.",
+                Toast.LENGTH_LONG
+        ).show());
+    }
+
+    private void performRestoreCompatibility() {
+        SharedPreferences prefs =
+                getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        if (!prefs.contains(PREF_PREVIOUS)) {
+            runOnUiThread(() -> Toast.makeText(
                     this,
-                    "Could not start Shizuku UserService: " + safeMessage(e),
+                    "No previous shortcut was saved by this app.",
                     Toast.LENGTH_LONG
-            ).show();
+            ).show());
+            return;
+        }
+
+        String previous =
+                prefs.getString(PREF_PREVIOUS, "none");
+
+        if (previous == null || previous.length() == 0) {
+            previous = "none";
+        }
+
+        CompatResult write =
+                compatibilityPut(previous);
+
+        if (!write.ok()) {
+            showCompatibilityFailure(
+                    "Compatibility mode could not restore the previous shortcut.",
+                    write
+            );
+            return;
+        }
+
+        CompatResult verify = compatibilityGet();
+
+        final boolean restored =
+                verify.ok()
+                        && previous.equals(
+                                normalizeSetting(verify.output)
+                        );
+
+        if (restored) {
+            prefs.edit()
+                    .remove(PREF_PREVIOUS)
+                    .apply();
+        }
+
+        runOnUiThread(() -> Toast.makeText(
+                this,
+                restored
+                        ? "Previous shortcut restored using compatibility mode."
+                        : "Compatibility restore ran, but the value did not match.",
+                Toast.LENGTH_LONG
+        ).show());
+    }
+
+    private CompatResult compatibilityGet() {
+        return runCompatibilityProcess(
+                new String[]{
+                        "/system/bin/settings",
+                        "get",
+                        "system",
+                        "double_click_power_key"
+                }
+        );
+    }
+
+    private CompatResult compatibilityPut(String value) {
+        return runCompatibilityProcess(
+                new String[]{
+                        "/system/bin/settings",
+                        "put",
+                        "system",
+                        "double_click_power_key",
+                        value
+                }
+        );
+    }
+
+    private CompatResult runCompatibilityProcess(
+            String[] command
+    ) {
+        Object process = null;
+
+        try {
+            java.lang.reflect.Method newProcess =
+                    Shizuku.class.getDeclaredMethod(
+                            "newProcess",
+                            String[].class,
+                            String[].class,
+                            String.class
+                    );
+
+            newProcess.setAccessible(true);
+
+            process = newProcess.invoke(
+                    null,
+                    new Object[]{
+                            command,
+                            null,
+                            null
+                    }
+            );
+
+            if (process == null) {
+                return new CompatResult(
+                        -1,
+                        "",
+                        "Shizuku did not create a remote process."
+                );
+            }
+
+            java.io.InputStream stdout =
+                    (java.io.InputStream) process
+                            .getClass()
+                            .getMethod("getInputStream")
+                            .invoke(process);
+
+            java.io.InputStream stderr =
+                    (java.io.InputStream) process
+                            .getClass()
+                            .getMethod("getErrorStream")
+                            .invoke(process);
+
+            int exitCode =
+                    ((Integer) process
+                            .getClass()
+                            .getMethod("waitFor")
+                            .invoke(process));
+
+            String output =
+                    readCompatibilityStream(stdout);
+
+            String error =
+                    readCompatibilityStream(stderr);
+
+            return new CompatResult(
+                    exitCode,
+                    output,
+                    error
+            );
+
+        } catch (Throwable e) {
+            Throwable cause = e;
+
+            while (cause.getCause() != null
+                    && cause.getCause() != cause) {
+                cause = cause.getCause();
+            }
+
+            return new CompatResult(
+                    -1,
+                    "",
+                    safeMessage(cause)
+            );
+
+        } finally {
+            if (process != null) {
+                try {
+                    process.getClass()
+                            .getMethod("destroy")
+                            .invoke(process);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    }
+
+    private String readCompatibilityStream(
+            java.io.InputStream stream
+    ) throws Exception {
+        if (stream == null) {
+            return "";
+        }
+
+        java.io.BufferedReader reader =
+                new java.io.BufferedReader(
+                        new java.io.InputStreamReader(
+                                stream,
+                                "UTF-8"
+                        )
+                );
+
+        StringBuilder result = new StringBuilder();
+        String line;
+
+        while ((line = reader.readLine()) != null) {
+            if (result.length() > 0) {
+                result.append('\n');
+            }
+
+            result.append(line);
+        }
+
+        reader.close();
+
+        return result.toString().trim();
+    }
+
+    private void showCompatibilityFailure(
+            String prefix,
+            CompatResult result
+    ) {
+        String detail =
+                firstNonEmpty(
+                        result.error,
+                        result.output
+                );
+
+        final String message =
+                detail.length() == 0
+                        ? prefix
+                        : prefix + " " + detail;
+
+        runOnUiThread(() -> Toast.makeText(
+                this,
+                message,
+                Toast.LENGTH_LONG
+        ).show());
+    }
+
+    private static final class CompatResult {
+        final int exitCode;
+        final String output;
+        final String error;
+
+        CompatResult(
+                int exitCode,
+                String output,
+                String error
+        ) {
+            this.exitCode = exitCode;
+            this.output =
+                    output == null ? "" : output;
+            this.error =
+                    error == null ? "" : error;
+        }
+
+        boolean ok() {
+            return exitCode == 0;
         }
     }
 
