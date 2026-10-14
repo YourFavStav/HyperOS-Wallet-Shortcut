@@ -8,7 +8,13 @@ public class ShortcutActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        WalletLauncher.open(this);
+
+        WalletLauncher.LaunchResult result = WalletLauncher.open(this);
+
+        if (result != WalletLauncher.LaunchResult.SUCCESS) {
+            LaunchErrorReporter.report(this, result);
+        }
+
         finish();
     }
 }

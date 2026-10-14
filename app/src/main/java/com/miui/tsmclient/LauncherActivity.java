@@ -15,6 +15,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Parcel;
@@ -37,8 +38,16 @@ public class LauncherActivity extends Activity {
     private static final String SHORTCUT_VALUE = "mi_pay";
     private static final String PREFS = "shortcut_prefs";
     private static final String PREF_PREVIOUS = "previous_double_click_power_key";
+    private static final String PREF_NOTIFICATION_PERMISSION_ASKED =
+            "notification_permission_asked";
+    private static final String POST_NOTIFICATIONS_PERMISSION =
+            "android.permission.POST_NOTIFICATIONS";
+
+    private static final String RELEASES_URL =
+            "https://github.com/YourFavStav/HyperOS-Wallet-Shortcut/releases/latest";
 
     private static final int SHIZUKU_REQUEST_CODE = 1001;
+    private static final int NOTIFICATION_REQUEST_CODE = 1002;
     private static final int OP_NONE = 0;
     private static final int OP_ENABLE = 1;
     private static final int OP_RESTORE = 2;
@@ -48,12 +57,22 @@ public class LauncherActivity extends Activity {
 
     private TextView shortcutStatus;
     private TextView shizukuStatus;
+    private LinearLayout updateContainer;
+    private TextView updateMessage;
     private Button enableButton;
     private Button restoreButton;
+
+    private static final long USER_SERVICE_TIMEOUT_MS = 8000L;
 
     private int pendingOperation = OP_NONE;
     private IBinder userServiceBinder;
     private boolean userServiceBound;
+
+    private final android.os.Handler userServiceTimeoutHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+
+    private Runnable userServiceTimeoutRunnable;
+    private boolean compatibilityFallbackRunning;
 
     private Shizuku.UserServiceArgs userServiceArgs;
 
@@ -88,10 +107,23 @@ public class LauncherActivity extends Activity {
     private final ServiceConnection userServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
+            cancelUserServiceTimeout();
+
             userServiceBinder = service;
             userServiceBound = true;
 
+            if (compatibilityFallbackRunning) {
+                unbindUserServiceSafely();
+                return;
+            }
+
             final int operation = pendingOperation;
+
+            if (operation == OP_NONE) {
+                unbindUserServiceSafely();
+                return;
+            }
+
             pendingOperation = OP_NONE;
 
             new Thread(() -> {
@@ -121,6 +153,8 @@ public class LauncherActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        requestNotificationPermissionIfNeeded();
 
         dark = (getResources().getConfiguration().uiMode
                 & Configuration.UI_MODE_NIGHT_MASK)
@@ -158,11 +192,19 @@ public class LauncherActivity extends Activity {
         Shizuku.addBinderDeadListener(binderDeadListener);
         Shizuku.addRequestPermissionResultListener(permissionResultListener);
 
+        // Request a fullscreen layout with actual system-bar padding applied
+        // to the ScrollView below. Works without AndroidX WindowCompat.
+        View decor = getWindow().getDecorView();
+        decor.setSystemUiVisibility(decor.getSystemUiVisibility()
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
         getWindow().setStatusBarColor(bg);
         getWindow().setNavigationBarColor(bg);
         setContentView(buildUi());
 
+        UpdateCheckScheduler.schedule(this);
         refreshStatuses();
+        checkForUpdates();
     }
 
     @Override
@@ -173,6 +215,7 @@ public class LauncherActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        cancelUserServiceTimeout();
         unbindUserServiceSafely();
 
         Shizuku.removeBinderReceivedListener(binderReceivedListener);
@@ -189,6 +232,15 @@ public class LauncherActivity extends Activity {
 
         LinearLayout root = vertical();
         root.setPadding(dp(20), dp(24), dp(20), dp(32));
+        scroll.setOnApplyWindowInsetsListener((view, insets) -> {
+            root.setPadding(
+                    dp(20),
+                    dp(24) + insets.getSystemWindowInsetTop(),
+                    dp(20),
+                    dp(32) + insets.getSystemWindowInsetBottom()
+            );
+            return insets;
+        });
 
         TextView eyebrow = label("HYPEROS UTILITY", 12, accent);
         eyebrow.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -205,11 +257,33 @@ public class LauncherActivity extends Activity {
         subtitle.setLineSpacing(0, 1.15f);
         root.addView(subtitle);
 
+        updateContainer = vertical();
+        updateContainer.setVisibility(View.GONE);
+
+        space(updateContainer, 18);
+
+        LinearLayout updateCard = sectionCard();
+        updateCard.addView(sectionTitle("Update available"));
+
+        updateMessage = body("A newer version is available.");
+        updateCard.addView(updateMessage);
+
+        space(updateCard, 12);
+
+        Button viewUpdate = actionButton("View update", true);
+        viewUpdate.setOnClickListener(v -> openLatestRelease());
+        updateCard.addView(viewUpdate);
+
+        updateContainer.addView(updateCard);
+        root.addView(updateContainer);
+
         space(root, 18);
 
         boolean walletInstalled = isWalletInstalled();
         root.addView(statusPill(
-                walletInstalled ? "●  Google Wallet detected" : "●  Google Wallet not detected",
+                walletInstalled
+                        ? "✓  Google Wallet installed"
+                        : "⚠  Google Wallet not installed",
                 walletInstalled
         ));
 
@@ -217,20 +291,6 @@ public class LauncherActivity extends Activity {
 
         shizukuStatus = statusPill("●  Checking Shizuku…", false);
         root.addView(shizukuStatus);
-
-        space(root, 14);
-
-        Button test = actionButton("Test Google Wallet", false);
-        test.setOnClickListener(v -> {
-            if (!WalletLauncher.open(this)) {
-                Toast.makeText(
-                        this,
-                        "Google Wallet could not be opened.",
-                        Toast.LENGTH_SHORT
-                ).show();
-            }
-        });
-        root.addView(test);
 
         space(root, 24);
 
@@ -256,6 +316,7 @@ public class LauncherActivity extends Activity {
         space(control, 10);
 
         restoreButton = actionButton("Restore previous shortcut", false);
+        restoreButton.setEnabled(hasPreviousShortcut());
         restoreButton.setOnClickListener(v -> startOperation(OP_RESTORE));
         control.addView(restoreButton);
 
@@ -298,34 +359,12 @@ public class LauncherActivity extends Activity {
         addSection(root, "Compatibility & privacy",
                 "No root is required. This app contains no analytics and does not access your cards, NFC payment data or Google account.\n\n"
                         + "Shizuku provides shell-level access while it is running. This app uses that access only when you tap Enable or Restore, "
-                        + "to read or change HyperOS's double-click power setting.\n\n"
-                        + "Do not install this app on a device that already contains Xiaomi's real com.miui.tsmclient / Mi Pay package.");
+                        + "to read or change HyperOS's double-click power setting.");
 
-        Button openShizuku = actionButton("Open Shizuku", false);
-        openShizuku.setOnClickListener(v -> openShizuku());
-        root.addView(openShizuku);
-
-        space(root, 10);
-
-        Button playStore = actionButton("Google Wallet on Play Store", false);
-        playStore.setOnClickListener(v -> openWalletListing());
-        root.addView(playStore);
-
-        space(root, 10);
-
-        Button appSettings = actionButton("App settings", false);
-        appSettings.setOnClickListener(v -> startActivity(
-                new Intent(
-                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                        Uri.parse("package:" + getPackageName())
-                )
-        ));
-        root.addView(appSettings);
-
-        space(root, 24);
+        space(root, 12);
 
         TextView footer = label(
-                "v1.1.0  •  No root  •  No card access  •  No analytics\n"
+                "v1.2.0  •  No root  •  No card access  •  No analytics\n"
                         + "Unofficial project — not affiliated with Xiaomi, Google or Shizuku.",
                 12, secondary);
         footer.setGravity(Gravity.CENTER);
@@ -392,16 +431,395 @@ public class LauncherActivity extends Activity {
     private void bindForPendingOperation() {
         if (pendingOperation == OP_NONE) return;
 
+        final int operation = pendingOperation;
+
         try {
-            Shizuku.bindUserService(userServiceArgs, userServiceConnection);
+            scheduleUserServiceTimeout(operation);
+            Shizuku.bindUserService(
+                    userServiceArgs,
+                    userServiceConnection
+            );
         } catch (Throwable e) {
-            pendingOperation = OP_NONE;
-            setBusy(false, null);
-            Toast.makeText(
+            cancelUserServiceTimeout();
+            cancelPendingUserServiceSafely();
+            startCompatibilityFallback(operation);
+        }
+    }
+
+    private void scheduleUserServiceTimeout(final int operation) {
+        cancelUserServiceTimeout();
+
+        userServiceTimeoutRunnable = () -> {
+            userServiceTimeoutRunnable = null;
+
+            if (pendingOperation != operation
+                    || userServiceBound
+                    || compatibilityFallbackRunning) {
+                return;
+            }
+
+            cancelPendingUserServiceSafely();
+            startCompatibilityFallback(operation);
+        };
+
+        userServiceTimeoutHandler.postDelayed(
+                userServiceTimeoutRunnable,
+                USER_SERVICE_TIMEOUT_MS
+        );
+    }
+
+    private void cancelUserServiceTimeout() {
+        if (userServiceTimeoutRunnable != null) {
+            userServiceTimeoutHandler.removeCallbacks(
+                    userServiceTimeoutRunnable
+            );
+            userServiceTimeoutRunnable = null;
+        }
+    }
+
+    private void cancelPendingUserServiceSafely() {
+        try {
+            Shizuku.unbindUserService(
+                    userServiceArgs,
+                    userServiceConnection,
+                    true
+            );
+        } catch (Throwable ignored) {
+        }
+
+        userServiceBinder = null;
+        userServiceBound = false;
+    }
+
+    private void startCompatibilityFallback(final int operation) {
+        if (operation == OP_NONE || compatibilityFallbackRunning) {
+            return;
+        }
+
+        compatibilityFallbackRunning = true;
+
+        setBusy(
+                true,
+                operation == OP_ENABLE
+                        ? "Trying compatibility mode…"
+                        : "Trying compatibility restore…"
+        );
+
+        new Thread(() -> {
+            try {
+                if (operation == OP_ENABLE) {
+                    performEnableCompatibility();
+                } else if (operation == OP_RESTORE) {
+                    performRestoreCompatibility();
+                }
+            } finally {
+                runOnUiThread(() -> {
+                    compatibilityFallbackRunning = false;
+
+                    if (pendingOperation == operation) {
+                        pendingOperation = OP_NONE;
+                    }
+
+                    setBusy(false, null);
+                    refreshStatuses();
+                });
+            }
+        }, "wallet-shortcut-compat").start();
+    }
+
+    private void performEnableCompatibility() {
+        CompatResult before = compatibilityGet();
+
+        if (!before.ok()) {
+            showCompatibilityFailure(
+                    "Compatibility mode could not read the current shortcut.",
+                    before
+            );
+            return;
+        }
+
+        String previous = normalizeSetting(before.output);
+
+        if (previous.length() == 0) {
+            previous = "none";
+        }
+
+        SharedPreferences prefs =
+                getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        if (!SHORTCUT_VALUE.equals(previous)
+                && !prefs.contains(PREF_PREVIOUS)) {
+            prefs.edit()
+                    .putString(PREF_PREVIOUS, previous)
+                    .apply();
+        }
+
+        CompatResult write =
+                compatibilityPut(SHORTCUT_VALUE);
+
+        if (!write.ok()) {
+            showCompatibilityFailure(
+                    "Compatibility mode could not enable the shortcut.",
+                    write
+            );
+            return;
+        }
+
+        CompatResult verify = compatibilityGet();
+
+        final boolean enabled =
+                verify.ok()
+                        && SHORTCUT_VALUE.equals(
+                                normalizeSetting(verify.output)
+                        );
+
+        runOnUiThread(() -> Toast.makeText(
+                this,
+                enabled
+                        ? "Shortcut enabled using compatibility mode. You can stop Shizuku now."
+                        : "Compatibility mode ran, but HyperOS did not keep the mi_pay setting.",
+                Toast.LENGTH_LONG
+        ).show());
+    }
+
+    private void performRestoreCompatibility() {
+        SharedPreferences prefs =
+                getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        if (!prefs.contains(PREF_PREVIOUS)) {
+            runOnUiThread(() -> Toast.makeText(
                     this,
-                    "Could not start Shizuku UserService: " + safeMessage(e),
+                    "No previous shortcut was saved by this app.",
                     Toast.LENGTH_LONG
-            ).show();
+            ).show());
+            return;
+        }
+
+        String previous =
+                prefs.getString(PREF_PREVIOUS, "none");
+
+        if (previous == null || previous.length() == 0) {
+            previous = "none";
+        }
+
+        CompatResult write =
+                compatibilityPut(previous);
+
+        if (!write.ok()) {
+            showCompatibilityFailure(
+                    "Compatibility mode could not restore the previous shortcut.",
+                    write
+            );
+            return;
+        }
+
+        CompatResult verify = compatibilityGet();
+
+        final boolean restored =
+                verify.ok()
+                        && previous.equals(
+                                normalizeSetting(verify.output)
+                        );
+
+        if (restored) {
+            prefs.edit()
+                    .remove(PREF_PREVIOUS)
+                    .apply();
+        }
+
+        runOnUiThread(() -> Toast.makeText(
+                this,
+                restored
+                        ? "Previous shortcut restored using compatibility mode."
+                        : "Compatibility restore ran, but the value did not match.",
+                Toast.LENGTH_LONG
+        ).show());
+    }
+
+    private CompatResult compatibilityGet() {
+        return runCompatibilityProcess(
+                new String[]{
+                        "/system/bin/settings",
+                        "get",
+                        "system",
+                        "double_click_power_key"
+                }
+        );
+    }
+
+    private CompatResult compatibilityPut(String value) {
+        return runCompatibilityProcess(
+                new String[]{
+                        "/system/bin/settings",
+                        "put",
+                        "system",
+                        "double_click_power_key",
+                        value
+                }
+        );
+    }
+
+    private CompatResult runCompatibilityProcess(
+            String[] command
+    ) {
+        Object process = null;
+
+        try {
+            java.lang.reflect.Method newProcess =
+                    Shizuku.class.getDeclaredMethod(
+                            "newProcess",
+                            String[].class,
+                            String[].class,
+                            String.class
+                    );
+
+            newProcess.setAccessible(true);
+
+            process = newProcess.invoke(
+                    null,
+                    new Object[]{
+                            command,
+                            null,
+                            null
+                    }
+            );
+
+            if (process == null) {
+                return new CompatResult(
+                        -1,
+                        "",
+                        "Shizuku did not create a remote process."
+                );
+            }
+
+            java.io.InputStream stdout =
+                    (java.io.InputStream) process
+                            .getClass()
+                            .getMethod("getInputStream")
+                            .invoke(process);
+
+            java.io.InputStream stderr =
+                    (java.io.InputStream) process
+                            .getClass()
+                            .getMethod("getErrorStream")
+                            .invoke(process);
+
+            int exitCode =
+                    ((Integer) process
+                            .getClass()
+                            .getMethod("waitFor")
+                            .invoke(process));
+
+            String output =
+                    readCompatibilityStream(stdout);
+
+            String error =
+                    readCompatibilityStream(stderr);
+
+            return new CompatResult(
+                    exitCode,
+                    output,
+                    error
+            );
+
+        } catch (Throwable e) {
+            Throwable cause = e;
+
+            while (cause.getCause() != null
+                    && cause.getCause() != cause) {
+                cause = cause.getCause();
+            }
+
+            return new CompatResult(
+                    -1,
+                    "",
+                    safeMessage(cause)
+            );
+
+        } finally {
+            if (process != null) {
+                try {
+                    process.getClass()
+                            .getMethod("destroy")
+                            .invoke(process);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    }
+
+    private String readCompatibilityStream(
+            java.io.InputStream stream
+    ) throws Exception {
+        if (stream == null) {
+            return "";
+        }
+
+        java.io.BufferedReader reader =
+                new java.io.BufferedReader(
+                        new java.io.InputStreamReader(
+                                stream,
+                                "UTF-8"
+                        )
+                );
+
+        StringBuilder result = new StringBuilder();
+        String line;
+
+        while ((line = reader.readLine()) != null) {
+            if (result.length() > 0) {
+                result.append('\n');
+            }
+
+            result.append(line);
+        }
+
+        reader.close();
+
+        return result.toString().trim();
+    }
+
+    private void showCompatibilityFailure(
+            String prefix,
+            CompatResult result
+    ) {
+        String detail =
+                firstNonEmpty(
+                        result.error,
+                        result.output
+                );
+
+        final String message =
+                detail.length() == 0
+                        ? prefix
+                        : prefix + " " + detail;
+
+        runOnUiThread(() -> Toast.makeText(
+                this,
+                message,
+                Toast.LENGTH_LONG
+        ).show());
+    }
+
+    private static final class CompatResult {
+        final int exitCode;
+        final String output;
+        final String error;
+
+        CompatResult(
+                int exitCode,
+                String output,
+                String error
+        ) {
+            this.exitCode = exitCode;
+            this.output =
+                    output == null ? "" : output;
+            this.error =
+                    error == null ? "" : error;
+        }
+
+        boolean ok() {
+            return exitCode == 0;
         }
     }
 
@@ -561,24 +979,43 @@ public class LauncherActivity extends Activity {
 
     private void refreshStatuses() {
         runOnUiThread(() -> {
-            if (shortcutStatus != null) {
-                String localValue = readShortcutValueLocally();
-                boolean enabled = SHORTCUT_VALUE.equals(localValue);
+            String localValue = readShortcutValueLocally();
+            boolean shortcutEnabled = SHORTCUT_VALUE.equals(localValue);
 
+            if (shortcutStatus != null) {
                 styleStatus(
                         shortcutStatus,
-                        enabled
-                                ? "●  Power-button shortcut enabled"
-                                : "●  Power-button shortcut not enabled",
-                        enabled
+                        shortcutEnabled
+                                ? "✓  Power shortcut ready"
+                                : "⚠  Power shortcut not configured",
+                        shortcutEnabled
                 );
+            }
+
+            if (enableButton != null && pendingOperation == OP_NONE) {
+                enableButton.setEnabled(!shortcutEnabled);
+                enableButton.setText(
+                        shortcutEnabled
+                                ? "Shortcut already enabled"
+                                : "Enable shortcut with Shizuku"
+                );
+            }
+
+            if (restoreButton != null && pendingOperation == OP_NONE) {
+                restoreButton.setEnabled(hasPreviousShortcut());
             }
 
             if (shizukuStatus != null) {
                 boolean running = Shizuku.pingBinder();
 
                 if (!running) {
-                    styleStatus(shizukuStatus, "●  Shizuku not running", false);
+                    styleStatus(
+                            shizukuStatus,
+                            shortcutEnabled
+                                    ? "Shizuku stopped — not required right now"
+                                    : "Shizuku not running — needed for setup",
+                            shortcutEnabled
+                    );
                 } else {
                     boolean granted = false;
 
@@ -591,8 +1028,8 @@ public class LauncherActivity extends Activity {
                     styleStatus(
                             shizukuStatus,
                             granted
-                                    ? "●  Shizuku ready"
-                                    : "●  Shizuku running — permission needed",
+                                    ? "✓  Shizuku ready"
+                                    : "⚠  Shizuku running — permission needed",
                             granted
                     );
                 }
@@ -622,42 +1059,30 @@ public class LauncherActivity extends Activity {
 
     private void setBusy(boolean busy, String label) {
         if (enableButton != null) {
-            enableButton.setEnabled(!busy);
-            enableButton.setText(
-                    busy && label != null
-                            ? label
-                            : "Enable shortcut with Shizuku"
-            );
+            boolean shortcutEnabled =
+                    SHORTCUT_VALUE.equals(readShortcutValueLocally());
+
+            enableButton.setEnabled(!busy && !shortcutEnabled);
+
+            if (busy && label != null) {
+                enableButton.setText(label);
+            } else {
+                enableButton.setText(
+                        shortcutEnabled
+                                ? "Shortcut already enabled"
+                                : "Enable shortcut with Shizuku"
+                );
+            }
         }
 
         if (restoreButton != null) {
-            restoreButton.setEnabled(!busy);
+            restoreButton.setEnabled(!busy && hasPreviousShortcut());
         }
     }
 
-    private void openShizuku() {
-        Intent intent = getPackageManager().getLaunchIntentForPackage(
-                "moe.shizuku.privileged.api"
-        );
-
-        if (intent == null) {
-            Toast.makeText(
-                    this,
-                    "Shizuku is not installed.",
-                    Toast.LENGTH_SHORT
-            ).show();
-            return;
-        }
-
-        try {
-            startActivity(intent);
-        } catch (ActivityNotFoundException e) {
-            Toast.makeText(
-                    this,
-                    "Could not open Shizuku.",
-                    Toast.LENGTH_SHORT
-            ).show();
-        }
+    private boolean hasPreviousShortcut() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE)
+                .contains(PREF_PREVIOUS);
     }
 
     private void addSection(LinearLayout root, String title, String content) {
@@ -816,24 +1241,6 @@ public class LauncherActivity extends Activity {
         }
     }
 
-    private void openWalletListing() {
-        Uri marketUri = Uri.parse(
-                "market://details?id=" + WalletLauncher.WALLET_PACKAGE
-        );
-
-        try {
-            startActivity(new Intent(Intent.ACTION_VIEW, marketUri));
-        } catch (ActivityNotFoundException e) {
-            startActivity(new Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse(
-                            "https://play.google.com/store/apps/details?id="
-                                    + WalletLauncher.WALLET_PACKAGE
-                    )
-            ));
-        }
-    }
-
     private String safeMessage(Throwable e) {
         Throwable current = e;
 
@@ -879,4 +1286,99 @@ public class LauncherActivity extends Activity {
             return exitCode == 0;
         }
     }
+
+    private void checkForUpdates() {
+        int installedCode = UpdateChecker.installedVersionCode(this);
+        if (installedCode < 0) return;
+
+        UpdateChecker.UpdateInfo cached = UpdateChecker.cached(this);
+        if (cached != null && cached.versionCode > installedCode) {
+            showUpdateAvailable(cached.versionName);
+        }
+
+        new Thread(() -> {
+            UpdateChecker.UpdateInfo latest = UpdateChecker.fetchIfDue(this);
+            if (latest == null) return;
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (latest.versionCode > installedCode) {
+                    showUpdateAvailable(latest.versionName);
+                } else {
+                    hideUpdateAvailable();
+                }
+            });
+        }, "wallet-shortcut-update-check").start();
+    }
+
+    private void showUpdateAvailable(String versionName) {
+        if (updateContainer == null || updateMessage == null) {
+            return;
+        }
+
+        String version = versionName == null
+                ? ""
+                : versionName.trim();
+
+        if (version.length() > 0) {
+            updateMessage.setText(
+                    "Version " + version + " is available."
+            );
+        } else {
+            updateMessage.setText(
+                    "A newer version is available."
+            );
+        }
+
+        updateContainer.setVisibility(View.VISIBLE);
+    }
+
+    private void hideUpdateAvailable() {
+        if (updateContainer != null) {
+            updateContainer.setVisibility(View.GONE);
+        }
+    }
+
+    private void openLatestRelease() {
+        try {
+            startActivity(
+                    new Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse(RELEASES_URL)
+                    )
+            );
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(
+                    this,
+                    "No browser is available to open the release page.",
+                    Toast.LENGTH_LONG
+            ).show();
+        }
+    }
+
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < 33) {
+            return;
+        }
+
+        if (checkSelfPermission(POST_NOTIFICATIONS_PERMISSION)
+                == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        if (prefs.getBoolean(PREF_NOTIFICATION_PERMISSION_ASKED, false)) {
+            return;
+        }
+
+        prefs.edit()
+                .putBoolean(PREF_NOTIFICATION_PERMISSION_ASKED, true)
+                .apply();
+
+        requestPermissions(
+                new String[]{POST_NOTIFICATIONS_PERMISSION},
+                NOTIFICATION_REQUEST_CODE
+        );
+    }
+
 }
