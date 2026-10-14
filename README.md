@@ -18,18 +18,18 @@ It uses HyperOS's internal `mi_pay` shortcut path and forwards that shortcut to 
 
 The app does **not** handle payments itself and does not access your cards, NFC payment data, or Google account.
 
-## What's new in v1.1.0
+## What's new in v1.2.0
 
-v1.1.0 adds built-in **Shizuku setup**, so normal users no longer need to install aShell or manually paste the setup command.
+- Improved compatibility with some MediaTek devices using a Shizuku fallback.
+- Improved Google Wallet launching, including lock-screen handling.
+- Added notifications for Wallet launch errors.
+- Added an in-app GitHub update checker.
+- Added periodic background update checks and notifications for newer releases.
+- Improved status-bar spacing and cleaned up the interface.
+- Preserved rootless shortcut setup and restoration.
 
-- Enable the HyperOS shortcut directly from the app.
-- Restore the previous power-button shortcut.
-- See whether Shizuku is running and ready.
-- See whether the Wallet shortcut is currently enabled.
-- Keep the original aShell command as a manual fallback.
-- Shizuku only needs to run while enabling or restoring the shortcut.
-
-After setup succeeds, you can stop Shizuku. The power-button shortcut itself does not depend on Shizuku staying active.
+Background update checks use Android JobScheduler and work over Wi-Fi
+or mobile data. Android may delay checks to conserve battery.
 
 ## How it works
 
@@ -53,7 +53,7 @@ com.miui.tsmclient
 
 It receives the HyperOS wallet shortcut and immediately forwards it to Google Wallet.
 
-For setup, v1.1.0 temporarily uses Shizuku's shell-level access to configure:
+For setup, the app temporarily uses Shizuku's shell-level access to configure:
 
 ```text
 double_click_power_key = mi_pay
@@ -129,13 +129,19 @@ mi_pay
 - Shortcut status detection.
 - Google Wallet detection.
 - Manual aShell fallback.
-- No background service required after setup.
+- No continuously running background service required for the power-button shortcut.
 - No analytics.
 - No card or payment-data access.
 
+## Known limitations
+
+- **Reboot reset:** Some HyperOS regional builds may reset the power-button shortcut after restarting. Re-enabling it through Shizuku may be necessary.
+- **Compatibility:** Some Xiaomi, Redmi and POCO devices restrict the internal Mi Pay shortcut. Compatibility is not guaranteed.
+- **Background updates:** HyperOS battery management may delay automatic update checks and notifications.
+
 ## Privacy
 
-HyperOS Wallet Shortcut does not collect analytics or personal information.
+HyperOS Wallet Shortcut does not collect analytics or personal information. Update checks make HTTPS requests to GitHub to retrieve public version metadata.
 
 The app does not read or store:
 

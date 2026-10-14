@@ -29,13 +29,6 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
-
-import org.json.JSONObject;
-
 import rikka.shizuku.Shizuku;
 
 public class LauncherActivity extends Activity {
@@ -50,21 +43,8 @@ public class LauncherActivity extends Activity {
     private static final String POST_NOTIFICATIONS_PERMISSION =
             "android.permission.POST_NOTIFICATIONS";
 
-    private static final String UPDATE_INFO_URL =
-            "https://raw.githubusercontent.com/YourFavStav/HyperOS-Wallet-Shortcut/main/update.json";
-
     private static final String RELEASES_URL =
             "https://github.com/YourFavStav/HyperOS-Wallet-Shortcut/releases/latest";
-
-    private static final String PREF_LAST_UPDATE_CHECK =
-            "last_update_check_v1";
-    private static final String PREF_CACHED_UPDATE_CODE =
-            "cached_update_code_v1";
-    private static final String PREF_CACHED_UPDATE_NAME =
-            "cached_update_name_v1";
-
-    private static final long UPDATE_CHECK_INTERVAL_MS =
-            12L * 60L * 60L * 1000L;
 
     private static final int SHIZUKU_REQUEST_CODE = 1001;
     private static final int NOTIFICATION_REQUEST_CODE = 1002;
@@ -212,10 +192,17 @@ public class LauncherActivity extends Activity {
         Shizuku.addBinderDeadListener(binderDeadListener);
         Shizuku.addRequestPermissionResultListener(permissionResultListener);
 
+        // Request a fullscreen layout with actual system-bar padding applied
+        // to the ScrollView below. Works without AndroidX WindowCompat.
+        View decor = getWindow().getDecorView();
+        decor.setSystemUiVisibility(decor.getSystemUiVisibility()
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
         getWindow().setStatusBarColor(bg);
         getWindow().setNavigationBarColor(bg);
         setContentView(buildUi());
 
+        UpdateCheckScheduler.schedule(this);
         refreshStatuses();
         checkForUpdates();
     }
@@ -245,6 +232,15 @@ public class LauncherActivity extends Activity {
 
         LinearLayout root = vertical();
         root.setPadding(dp(20), dp(24), dp(20), dp(32));
+        scroll.setOnApplyWindowInsetsListener((view, insets) -> {
+            root.setPadding(
+                    dp(20),
+                    dp(24) + insets.getSystemWindowInsetTop(),
+                    dp(20),
+                    dp(32) + insets.getSystemWindowInsetBottom()
+            );
+            return insets;
+        });
 
         TextView eyebrow = label("HYPEROS UTILITY", 12, accent);
         eyebrow.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -295,22 +291,6 @@ public class LauncherActivity extends Activity {
 
         shizukuStatus = statusPill("●  Checking Shizuku…", false);
         root.addView(shizukuStatus);
-
-        space(root, 14);
-
-        Button test = actionButton("Test Google Wallet", false);
-        test.setOnClickListener(v -> {
-            WalletLauncher.LaunchResult result = WalletLauncher.open(this);
-
-            if (result != WalletLauncher.LaunchResult.SUCCESS) {
-                Toast.makeText(
-                        this,
-                        WalletLauncher.errorMessage(result),
-                        Toast.LENGTH_LONG
-                ).show();
-            }
-        });
-        root.addView(test);
 
         space(root, 24);
 
@@ -379,34 +359,12 @@ public class LauncherActivity extends Activity {
         addSection(root, "Compatibility & privacy",
                 "No root is required. This app contains no analytics and does not access your cards, NFC payment data or Google account.\n\n"
                         + "Shizuku provides shell-level access while it is running. This app uses that access only when you tap Enable or Restore, "
-                        + "to read or change HyperOS's double-click power setting.\n\n"
-                        + "Do not install this app on a device that already contains Xiaomi's real com.miui.tsmclient / Mi Pay package.");
+                        + "to read or change HyperOS's double-click power setting.");
 
-        Button openShizuku = actionButton("Open Shizuku", false);
-        openShizuku.setOnClickListener(v -> openShizuku());
-        root.addView(openShizuku);
-
-        space(root, 10);
-
-        Button playStore = actionButton("Google Wallet on Play Store", false);
-        playStore.setOnClickListener(v -> openWalletListing());
-        root.addView(playStore);
-
-        space(root, 10);
-
-        Button appSettings = actionButton("App settings", false);
-        appSettings.setOnClickListener(v -> startActivity(
-                new Intent(
-                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                        Uri.parse("package:" + getPackageName())
-                )
-        ));
-        root.addView(appSettings);
-
-        space(root, 24);
+        space(root, 12);
 
         TextView footer = label(
-                "v1.1.0  •  No root  •  No card access  •  No analytics\n"
+                "v1.2.0  •  No root  •  No card access  •  No analytics\n"
                         + "Unofficial project — not affiliated with Xiaomi, Google or Shizuku.",
                 12, secondary);
         footer.setGravity(Gravity.CENTER);
@@ -1127,31 +1085,6 @@ public class LauncherActivity extends Activity {
                 .contains(PREF_PREVIOUS);
     }
 
-    private void openShizuku() {
-        Intent intent = getPackageManager().getLaunchIntentForPackage(
-                "moe.shizuku.privileged.api"
-        );
-
-        if (intent == null) {
-            Toast.makeText(
-                    this,
-                    "Shizuku is not installed.",
-                    Toast.LENGTH_SHORT
-            ).show();
-            return;
-        }
-
-        try {
-            startActivity(intent);
-        } catch (ActivityNotFoundException e) {
-            Toast.makeText(
-                    this,
-                    "Could not open Shizuku.",
-                    Toast.LENGTH_SHORT
-            ).show();
-        }
-    }
-
     private void addSection(LinearLayout root, String title, String content) {
         LinearLayout cardView = sectionCard();
         cardView.addView(sectionTitle(title));
@@ -1308,24 +1241,6 @@ public class LauncherActivity extends Activity {
         }
     }
 
-    private void openWalletListing() {
-        Uri marketUri = Uri.parse(
-                "market://details?id=" + WalletLauncher.WALLET_PACKAGE
-        );
-
-        try {
-            startActivity(new Intent(Intent.ACTION_VIEW, marketUri));
-        } catch (ActivityNotFoundException e) {
-            startActivity(new Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse(
-                            "https://play.google.com/store/apps/details?id="
-                                    + WalletLauncher.WALLET_PACKAGE
-                    )
-            ));
-        }
-    }
-
     private String safeMessage(Throwable e) {
         Throwable current = e;
 
@@ -1373,111 +1288,26 @@ public class LauncherActivity extends Activity {
     }
 
     private void checkForUpdates() {
-        final int currentVersionCode = getCurrentVersionCode();
+        int installedCode = UpdateChecker.installedVersionCode(this);
+        if (installedCode < 0) return;
 
-        if (currentVersionCode < 0) {
-            return;
+        UpdateChecker.UpdateInfo cached = UpdateChecker.cached(this);
+        if (cached != null && cached.versionCode > installedCode) {
+            showUpdateAvailable(cached.versionName);
         }
 
-        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-
-        int cachedCode = prefs.getInt(PREF_CACHED_UPDATE_CODE, -1);
-        String cachedName = prefs.getString(PREF_CACHED_UPDATE_NAME, "");
-
-        if (cachedCode > currentVersionCode) {
-            showUpdateAvailable(cachedName);
-        }
-
-        long now = System.currentTimeMillis();
-        long lastCheck = prefs.getLong(PREF_LAST_UPDATE_CHECK, 0L);
-
-        if (now - lastCheck < UPDATE_CHECK_INTERVAL_MS) {
-            return;
-        }
-
-        new Thread(() -> fetchUpdateInfo(currentVersionCode),
-                "wallet-shortcut-update-check").start();
-    }
-
-    private void fetchUpdateInfo(int currentVersionCode) {
-        HttpURLConnection connection = null;
-
-        try {
-            URL url = new URL(UPDATE_INFO_URL);
-
-            connection = (HttpURLConnection) url.openConnection();
-            connection.setConnectTimeout(5000);
-            connection.setReadTimeout(5000);
-            connection.setRequestMethod("GET");
-            connection.setRequestProperty(
-                    "User-Agent",
-                    "HyperOS-Wallet-Shortcut"
-            );
-
-            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
-                return;
-            }
-
-            BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(
-                            connection.getInputStream(),
-                            "UTF-8"
-                    )
-            );
-
-            StringBuilder jsonText = new StringBuilder();
-            String line;
-
-            while ((line = reader.readLine()) != null) {
-                jsonText.append(line);
-            }
-
-            reader.close();
-
-            JSONObject json = new JSONObject(jsonText.toString());
-
-            int remoteVersionCode = json.getInt("versionCode");
-            String remoteVersionName =
-                    json.optString("versionName", "").trim();
-
-            SharedPreferences prefs =
-                    getSharedPreferences(PREFS, MODE_PRIVATE);
-
-            prefs.edit()
-                    .putInt(PREF_CACHED_UPDATE_CODE, remoteVersionCode)
-                    .putString(PREF_CACHED_UPDATE_NAME, remoteVersionName)
-                    .putLong(PREF_LAST_UPDATE_CHECK, System.currentTimeMillis())
-                    .apply();
-
+        new Thread(() -> {
+            UpdateChecker.UpdateInfo latest = UpdateChecker.fetchIfDue(this);
+            if (latest == null) return;
             runOnUiThread(() -> {
-                if (isFinishing()) {
-                    return;
-                }
-
-                if (remoteVersionCode > currentVersionCode) {
-                    showUpdateAvailable(remoteVersionName);
+                if (isFinishing() || isDestroyed()) return;
+                if (latest.versionCode > installedCode) {
+                    showUpdateAvailable(latest.versionName);
                 } else {
                     hideUpdateAvailable();
                 }
             });
-
-        } catch (Exception ignored) {
-            // Update checks must never interfere with normal app use.
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
-        }
-    }
-
-    private int getCurrentVersionCode() {
-        try {
-            return getPackageManager()
-                    .getPackageInfo(getPackageName(), 0)
-                    .versionCode;
-        } catch (PackageManager.NameNotFoundException ignored) {
-            return -1;
-        }
+        }, "wallet-shortcut-update-check").start();
     }
 
     private void showUpdateAvailable(String versionName) {
