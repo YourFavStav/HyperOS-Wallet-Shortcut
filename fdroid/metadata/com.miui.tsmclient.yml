@@ -32,5 +32,5 @@ AntiFeatures:
   NonFreeDep:
     en-US: Requires Google Wallet, which is proprietary software.
 
-CurrentVersion: 1.2.0
-CurrentVersionCode: 3
+CurrentVersion: 1.2.1
+CurrentVersionCode: 4
