@@ -18,6 +18,37 @@ It uses HyperOS's internal `mi_pay` shortcut path and forwards that shortcut to 
 
 The app does **not** handle payments itself and does not access your cards, NFC payment data, or Google account.
 
+## What's new in v1.2.1
+
+### Automatic shortcut recovery after reboot
+
+Some HyperOS builds reset the double-press Power shortcut after restarting.
+
+v1.2.1 introduces optional automatic recovery:
+
+- OFF by default, with explicit user consent.
+- Checks the shortcut after reboot using Shizuku.
+- Restores `mi_pay` if HyperOS resets the setting to null.
+- Does not overwrite another non-null shortcut selection.
+- Reports recovery failures through notifications and in-app warnings.
+- Allows recovery to be disabled at any time.
+
+Recovery timing depends on Android background scheduling and Shizuku availability.
+
+### Recommended: Shizuku-Next
+
+For the best automatic recovery experience, we recommend [Shizuku-Next](https://github.com/rushiranpise/Shizuku-Next).
+
+With a compatible configuration, automatic recovery can work after reboot without Wi-Fi.
+
+We've successfully tested automatic recovery with Wi-Fi disabled, mobile data enabled, and neither app opened manually.
+
+**Important:** Results may vary depending on the device, HyperOS version, and Shizuku configuration. Automatic recovery is not guaranteed on every device.
+
+Once the shortcut is configured, Shizuku can be stopped immediately. The power-button shortcut works without it.
+
+If Automatic recovery is enabled, Shizuku must be configured to start automatically after reboot so the app can check and restore the shortcut if necessary. Shizuku can be stopped again after recovery finishes.
+
 ## What's new in v1.2.0
 
 - Improved compatibility with some MediaTek devices using a Shizuku fallback.
@@ -124,6 +155,8 @@ mi_pay
 - Double-press Power to launch Google Wallet.
 - Rootless operation.
 - Built-in Shizuku setup.
+- Optional automatic shortcut recovery after reboot.
+- Recovery failure notifications and in-app warnings.
 - One-tap shortcut enable.
 - Restore previous shortcut.
 - Shortcut status detection.
@@ -135,7 +168,7 @@ mi_pay
 
 ## Known limitations
 
-- **Reboot reset:** Some HyperOS regional builds may reset the power-button shortcut after restarting. Re-enabling it through Shizuku may be necessary.
+- **Reboot reset:** Some HyperOS regional builds reset the shortcut after restarting. Optional automatic recovery can help, but requires Shizuku to become available and is not guaranteed on every device.
 - **Compatibility:** Some Xiaomi, Redmi and POCO devices restrict the internal Mi Pay shortcut. Compatibility is not guaranteed.
 - **Background updates:** HyperOS battery management may delay automatic update checks and notifications.
 
@@ -150,7 +183,7 @@ The app does not read or store:
 - Google Wallet account information
 - Google account credentials
 
-Shizuku provides shell-level access while it is running. HyperOS Wallet Shortcut uses that access only when you explicitly tap **Enable shortcut with Shizuku** or **Restore previous shortcut**, in order to read or change the HyperOS double-click power setting.
+Shizuku provides shell-level access while it is running. The app uses that access for manual Enable and Restore actions, and during automatic reboot recovery if you opt in, to read or change the HyperOS double-click power setting.
 
 ## Compatibility
 

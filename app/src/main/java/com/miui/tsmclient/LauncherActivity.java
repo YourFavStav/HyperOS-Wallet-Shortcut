@@ -38,6 +38,9 @@ public class LauncherActivity extends Activity {
     private static final String SHORTCUT_VALUE = "mi_pay";
     private static final String PREFS = "shortcut_prefs";
     private static final String PREF_PREVIOUS = "previous_double_click_power_key";
+    private static final String PREF_AUTO_RESTORE = "auto_restore_enabled";
+    private static final String PREF_RECOVERY_PROMPTED = "auto_restore_prompted_v1";
+    private android.widget.Switch recoverySwitch;
     private static final String PREF_NOTIFICATION_PERMISSION_ASKED =
             "notification_permission_asked";
     private static final String POST_NOTIFICATIONS_PERMISSION =
@@ -303,8 +306,8 @@ public class LauncherActivity extends Activity {
         space(control, 12);
 
         control.addView(body(
-                "Shizuku is only needed while enabling or restoring the HyperOS shortcut. "
-                        + "After setup succeeds, Shizuku can be stopped."
+                "Shizuku is needed to enable or restore the shortcut. With Automatic recovery ON, Shizuku must be available after reboot. "
+                        + "Once recovery finishes, Shizuku can be stopped. With recovery OFF, it can be stopped after manual setup."
         ));
 
         space(control, 14);
@@ -323,12 +326,63 @@ public class LauncherActivity extends Activity {
         root.addView(control);
         space(root, 18);
 
+        LinearLayout recoveryCard = sectionCard();
+        recoveryCard.addView(sectionTitle("Automatic recovery"));
+
+        recoverySwitch = new android.widget.Switch(this);
+        recoverySwitch.setText("Restore shortcut after reboot");
+        recoverySwitch.setTextColor(text);
+        recoverySwitch.setTextSize(15);
+        recoverySwitch.setPadding(0, dp(8), 0, dp(8));
+
+        android.content.res.ColorStateList switchColors =
+                new android.content.res.ColorStateList(
+                        new int[][] {
+                                new int[] { android.R.attr.state_checked },
+                                new int[] {}
+                        },
+                        new int[] {
+                                accent,
+                                dark ? Color.LTGRAY : Color.GRAY
+                        }
+                );
+        recoverySwitch.setThumbTintList(switchColors);
+
+        SharedPreferences recoveryPrefs =
+                getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        recoverySwitch.setChecked(
+                recoveryPrefs.getBoolean(PREF_RECOVERY_PROMPTED, false)
+                        && recoveryPrefs.getBoolean(PREF_AUTO_RESTORE, false)
+        );
+
+        recoverySwitch.setOnCheckedChangeListener(
+                (button, checked) -> setRecoveryEnabled(checked)
+        );
+
+        recoveryCard.addView(recoverySwitch);
+        recoveryCard.addView(body(
+                "Optional. Attempts to restore mi_pay after reboot if HyperOS "
+                + "removes it. Requires Shizuku to restart automatically. "
+                + "Manual changes outside this app may also be treated as resets."
+        ));
+
+        recoveryWarning = new android.widget.TextView(this);
+        recoveryWarning.setTextColor(warning);
+        recoveryWarning.setTextSize(13);
+        recoveryWarning.setPadding(0, dp(10), 0, 0);
+        recoveryWarning.setVisibility(View.GONE);
+        recoveryCard.addView(recoveryWarning);
+
+        root.addView(recoveryCard);
+        space(root, 18);
+
         addSection(root, "How it works",
                 "Power double press  →  HyperOS “mi_pay”  →  Wallet Shortcut  →  Google Wallet\n\n"
                         + "HyperOS contains an internal shortcut named “mi_pay”. "
                         + "When you tap Enable, this app temporarily uses Shizuku's shell identity "
                         + "to set that shortcut. The normal power-button shortcut does not depend on "
-                        + "Shizuku after setup.");
+                        + "Shizuku after setup. With Automatic recovery enabled, the app also uses Shizuku to check and restore the shortcut after reboot.");
 
         LinearLayout fallback = sectionCard();
         fallback.addView(sectionTitle("Manual fallback"));
@@ -358,13 +412,13 @@ public class LauncherActivity extends Activity {
 
         addSection(root, "Compatibility & privacy",
                 "No root is required. This app contains no analytics and does not access your cards, NFC payment data or Google account.\n\n"
-                        + "Shizuku provides shell-level access while it is running. This app uses that access only when you tap Enable or Restore, "
+                        + "Shizuku provides shell-level access while it is running. This app uses that access when you tap Enable or Restore and, if you opt in, during automatic reboot recovery, "
                         + "to read or change HyperOS's double-click power setting.");
 
         space(root, 12);
 
         TextView footer = label(
-                "v1.2.0  •  No root  •  No card access  •  No analytics\n"
+                "v1.2.1  •  No root  •  No card access  •  No analytics\n"
                         + "Unofficial project — not affiliated with Xiaomi, Google or Shizuku.",
                 12, secondary);
         footer.setGravity(Gravity.CENTER);
@@ -573,6 +627,8 @@ public class LauncherActivity extends Activity {
                                 normalizeSetting(verify.output)
                         );
 
+        if (enabled) offerAutomaticRecovery();
+
         runOnUiThread(() -> Toast.makeText(
                 this,
                 enabled
@@ -622,9 +678,8 @@ public class LauncherActivity extends Activity {
                         );
 
         if (restored) {
-            prefs.edit()
-                    .remove(PREF_PREVIOUS)
-                    .apply();
+            prefs.edit().remove(PREF_PREVIOUS).apply();
+            disableRecoveryAfterRestore();
         }
 
         runOnUiThread(() -> Toast.makeText(
@@ -849,6 +904,8 @@ public class LauncherActivity extends Activity {
         boolean enabled = verify.ok()
                 && SHORTCUT_VALUE.equals(normalizeSetting(verify.output));
 
+        if (enabled) offerAutomaticRecovery();
+
         runOnUiThread(() -> {
             if (enabled) {
                 Toast.makeText(
@@ -863,6 +920,86 @@ public class LauncherActivity extends Activity {
                         Toast.LENGTH_LONG
                 ).show();
             }
+        });
+    }
+
+    private void setRecoveryEnabled(boolean enabled) {
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        prefs.edit()
+                .putBoolean(PREF_RECOVERY_PROMPTED, true)
+                .putBoolean(PREF_AUTO_RESTORE, enabled)
+                .apply();
+
+        if (recoverySwitch != null
+                && recoverySwitch.isChecked() != enabled) {
+            recoverySwitch.setChecked(enabled);
+        }
+
+        if (!enabled) {
+            RecoveryFailureReporter.clear(this);
+            refreshStatuses();
+            android.app.job.JobScheduler scheduler =
+                    (android.app.job.JobScheduler)
+                    getSystemService(JOB_SCHEDULER_SERVICE);
+            if (scheduler != null) {
+                scheduler.cancel(BootRestoreScheduler.JOB_ID);
+            }
+        }
+    }
+
+    private void disableRecoveryAfterRestore() {
+        RecoveryFailureReporter.clear(this);
+        // Disable recovery immediately without changing first-time consent.
+        getSharedPreferences(PREFS, MODE_PRIVATE)
+                .edit()
+                .remove(PREF_AUTO_RESTORE)
+                .apply();
+
+        runOnUiThread(() -> {
+            if (recoverySwitch != null) {
+                // Avoid treating a programmatic change as user consent.
+                recoverySwitch.setOnCheckedChangeListener(null);
+                recoverySwitch.setChecked(false);
+                recoverySwitch.setOnCheckedChangeListener(
+                        (button, checked) -> setRecoveryEnabled(checked)
+                );
+            }
+
+            android.app.job.JobScheduler scheduler =
+                    (android.app.job.JobScheduler)
+                    getSystemService(JOB_SCHEDULER_SERVICE);
+
+            if (scheduler != null) {
+                scheduler.cancel(BootRestoreScheduler.JOB_ID);
+            }
+        });
+    }
+
+    private void offerAutomaticRecovery() {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+
+            SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+            if (prefs.getBoolean(PREF_RECOVERY_PROMPTED, false)) return;
+
+            new android.app.AlertDialog.Builder(
+                    this,
+                    dark ? android.R.style.Theme_Material_Dialog_Alert
+                         : android.R.style.Theme_Material_Light_Dialog_Alert
+            )
+                    .setTitle("Automatic shortcut recovery")
+                    .setMessage(
+                            "HyperOS may reset your Wallet shortcut after reboot. "
+                            + "Would you like this app to attempt restoring it? "
+                            + "Shizuku must start automatically. This may also "
+                            + "undo a manual deletion made outside this app."
+                    )
+                    .setPositiveButton("Enable recovery",
+                            (dialog, which) -> setRecoveryEnabled(true))
+                    .setNegativeButton("Not now",
+                            (dialog, which) -> setRecoveryEnabled(false))
+                    .setOnCancelListener(dialog -> setRecoveryEnabled(false))
+                    .show();
         });
     }
 
@@ -893,6 +1030,7 @@ public class LauncherActivity extends Activity {
 
         if (restored) {
             prefs.edit().remove(PREF_PREVIOUS).apply();
+            disableRecoveryAfterRestore();
         }
 
         final boolean finalRestored = restored;
@@ -977,8 +1115,21 @@ public class LauncherActivity extends Activity {
         userServiceBound = false;
     }
 
+    private android.widget.TextView recoveryWarning;
+
     private void refreshStatuses() {
         runOnUiThread(() -> {
+            if (recoveryWarning != null) {
+                String error = RecoveryFailureReporter.getWarning(this);
+                boolean enabled = getSharedPreferences(PREFS, MODE_PRIVATE)
+                        .getBoolean(PREF_AUTO_RESTORE, false);
+                boolean show = enabled && !error.isEmpty();
+
+                recoveryWarning.setText(show ? "⚠  " + error : "");
+                recoveryWarning.setVisibility(
+                        show ? View.VISIBLE : View.GONE);
+            }
+
             String localValue = readShortcutValueLocally();
             boolean shortcutEnabled = SHORTCUT_VALUE.equals(localValue);
 
